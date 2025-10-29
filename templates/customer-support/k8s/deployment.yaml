@@ -1,0 +1,222 @@
+# Customer Support Agent - Kubernetes Deployment
+# Production-ready Kubernetes manifests with auto-scaling and monitoring
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: customer-support-api
+  namespace: customer-support
+  labels:
+    app: customer-support-api
+    version: v1.0.0
+    component: backend
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: customer-support-api
+  template:
+    metadata:
+      labels:
+        app: customer-support-api
+        version: v1.0.0
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+      - name: customer-support-api
+        image: customer-support-api:latest
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: ENVIRONMENT
+          value: "production"
+        - name: OPENAI_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-secrets
+              key: openai-api-key
+        - name: CUSTOMER_SUPPORT_API_KEY
+          valueFrom:
+            secretKeyRef:
+              name: api-secrets
+              key: api-key
+        - name: CUSTOMER_SUPPORT_REDIS_URL
+          value: "redis://redis-service:6379"
+        - name: CUSTOMER_SUPPORT_DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: database-secrets
+              key: postgres-url
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        volumeMounts:
+        - name: logs
+          mountPath: /app/logs
+        - name: config
+          mountPath: /app/config
+          readOnly: true
+      volumes:
+      - name: logs
+        emptyDir: {}
+      - name: config
+        configMap:
+          name: customer-support-config
+      imagePullSecrets:
+      - name: docker-registry-secret
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-support-api-service
+  namespace: customer-support
+  labels:
+    app: customer-support-api
+spec:
+  selector:
+    app: customer-support-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+    protocol: TCP
+  type: ClusterIP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: customer-support-api-loadbalancer
+  namespace: customer-support
+  labels:
+    app: customer-support-api
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-backend-protocol: "http"
+spec:
+  selector:
+    app: customer-support-api
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8000
+    protocol: TCP
+  type: LoadBalancer
+
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: customer-support-api-hpa
+  namespace: customer-support
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: customer-support-api
+  minReplicas: 3
+  maxReplicas: 20
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+      - type: Percent
+        value: 50
+        periodSeconds: 60
+      - type: Pods
+        value: 2
+        periodSeconds: 60
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: customer-support-config
+  namespace: customer-support
+data:
+  app.yaml: |
+    environment: production
+    log_level: INFO
+    max_concurrent_requests: 200
+    request_timeout: 60
+    enable_metrics: true
+    enable_rate_limiting: true
+    rate_limit_requests: 120
+    company_name: "Your Company"
+    business_hours: "Monday-Friday 9AM-6PM EST"
+  
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-secrets
+  namespace: customer-support
+type: Opaque
+data:
+  # Base64 encoded secrets (replace with your actual values)
+  openai-api-key: "eW91ci1vcGVuYWktYXBpLWtleQ=="  # your-openai-api-key
+  api-key: "eW91ci1hcGkta2V5"  # your-api-key
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: database-secrets
+  namespace: customer-support
+type: Opaque
+data:
+  # Base64 encoded database URL
+  postgres-url: "cG9zdGdyZXNxbDovL3VzZXI6cGFzc3dvcmRAcG9zdGdyZXM6NTQzMi9kYg=="
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: customer-support
+  labels:
+    name: customer-support
+    monitoring: enabled

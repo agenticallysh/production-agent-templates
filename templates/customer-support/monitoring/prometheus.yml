@@ -1,0 +1,95 @@
+# Prometheus Configuration for Customer Support Agent
+# Production monitoring setup with custom metrics and alerting
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Alertmanager configuration
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+# Load rules once and periodically evaluate them
+rule_files:
+  - "alert_rules.yml"
+
+# Scrape configurations
+scrape_configs:
+  # Prometheus itself
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Customer Support API
+  - job_name: 'customer-support-api'
+    static_configs:
+      - targets: ['customer-support-api:8000']
+    metrics_path: '/metrics'
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    honor_labels: true
+    params:
+      format: ['prometheus']
+
+  # Redis monitoring
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis:6379']
+
+  # PostgreSQL monitoring  
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres:5432']
+
+  # Node exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+
+  # Docker container metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+
+  # Nginx metrics
+  - job_name: 'nginx'
+    static_configs:
+      - targets: ['nginx:9113']
+
+  # Custom application metrics
+  - job_name: 'customer-support-metrics'
+    static_configs:
+      - targets: ['customer-support-api:8000']
+    metrics_path: '/api/v1/metrics'
+    scrape_interval: 30s
+
+# Recording rules for performance optimization
+recording_rules:
+  - name: customer_support_performance
+    rules:
+    - record: customer_support:response_time_p95
+      expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))
+    
+    - record: customer_support:error_rate
+      expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m])
+    
+    - record: customer_support:request_rate
+      expr: rate(http_requests_total[5m])
+    
+    - record: customer_support:agent_utilization
+      expr: crewai_agent_active_tasks / crewai_agent_total_capacity
+
+# Remote write configuration (for long-term storage)
+remote_write:
+  - url: "https://your-prometheus-remote-write-endpoint"
+    basic_auth:
+      username: "your-username"
+      password: "your-password"
+    write_relabel_configs:
+    - source_labels: [__name__]
+      regex: 'customer_support:.*'
+      target_label: __name__
+      replacement: '${1}'
